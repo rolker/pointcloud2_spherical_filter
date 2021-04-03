@@ -2,8 +2,29 @@
 #include "sensor_msgs/PointCloud2.h"
 
 ros::Publisher output_pub;
-double radius;
-double radius_squared;
+
+struct Exclude
+{
+    Exclude(double min, double max)
+    {
+        min_radius = min;
+        max_radius = max;
+        min_radius_squared = min*min;
+        max_radius_squared = max*max;
+    }
+
+    double min_radius;
+    double max_radius;
+    double min_radius_squared;
+    double max_radius_squared;
+
+    bool operator()(double radius_squared) const
+    {
+        return (radius_squared >= min_radius_squared && radius_squared <= max_radius_squared);
+    }
+};
+
+std::vector<Exclude> excludes;
 
 void pc_callabck(const sensor_msgs::PointCloud2::ConstPtr &data)
 {
@@ -37,12 +58,20 @@ void pc_callabck(const sensor_msgs::PointCloud2::ConstPtr &data)
         
         for(uint32_t i = 0; i+data->point_step <= data->data.size(); i+=data->point_step)
         {
-            double x = *reinterpret_cast<const double*>(&data->data[i+xoffset]);
-            double y = *reinterpret_cast<const double*>(&data->data[i+yoffset]);
-            double z = *reinterpret_cast<const double*>(&data->data[i+zoffset]);
+            float x = *reinterpret_cast<const float*>(&data->data[i+xoffset]);
+            float y = *reinterpret_cast<const float*>(&data->data[i+yoffset]);
+            float z = *reinterpret_cast<const float*>(&data->data[i+zoffset]);
             double r2 = x*x+y*y+z*z;
-            if (r2 > radius_squared)
+            bool exclude = false;
+            for(auto e: excludes)
             {
+                exclude = exclude || e(r2);
+                if(exclude)
+                    break;
+            }
+            if (!exclude)
+            {
+                ROS_INFO_STREAM("keeping: " << x << ", " << y << ", " << z << " r: " << sqrt(r2));
                 for(uint32_t j = i; j < i+data->point_step; j++)
                     out.data.push_back(data->data[j]);
                 out.row_step += data->point_step;
@@ -51,18 +80,44 @@ void pc_callabck(const sensor_msgs::PointCloud2::ConstPtr &data)
         }
         output_pub.publish(out);
     }
+    else
+        ROS_WARN_STREAM("Can't filter: Did not fine xyz fields of type float32 or data is big endian");
 }
 
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "pointcloud2_spherical_filter");
+
+    if(ros::param::has("~radius"))
+    {
+        double radius;
+        ros::param::param<double>("radius", radius, 1.0);
+        excludes.push_back(Exclude(0,radius));
+    }
+
+    if(ros::param::has("~excludes"))
+    {
+        XmlRpc::XmlRpcValue excludes_list;
+        ros::param::get("~excludes", excludes_list);
+        if(excludes_list.getType() == XmlRpc::XmlRpcValue::TypeArray)
+        {
+            for (int32_t i = 0; i < excludes_list.size(); ++i) 
+            {
+                double min,max;
+                min = static_cast<double>(excludes_list[i]["min"]);
+                max = static_cast<double>(excludes_list[i]["max"]);
+                excludes.push_back(Exclude(min,max));
+                ROS_INFO_STREAM("Adding exclude: " << min << " - " << max);
+            }
+        }
+        else
+            ROS_WARN_STREAM("Expected excludes paramter to be a list, got " << excludes_list.getType());
+    }   
+
     ros::NodeHandle nh;
 
-    nh.param<double>("radius", radius, 1.0);
-    radius_squared = radius*radius;
-    
-    output_pub = nh.advertise<sensor_msgs::PointCloud2>("/output",1);
-    ros::Subscriber input_sub = nh.subscribe("/input", 1, &pc_callabck);
+    output_pub = nh.advertise<sensor_msgs::PointCloud2>("output",1);
+    ros::Subscriber input_sub = nh.subscribe("input", 1, &pc_callabck);
     
     ros::spin();
     
