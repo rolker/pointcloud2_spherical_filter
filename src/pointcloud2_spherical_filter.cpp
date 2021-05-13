@@ -71,7 +71,7 @@ void pc_callabck(const sensor_msgs::PointCloud2::ConstPtr &data)
             }
             if (!exclude)
             {
-                ROS_INFO_STREAM("keeping: " << x << ", " << y << ", " << z << " r: " << sqrt(r2));
+                ROS_DEBUG_STREAM("keeping: " << x << ", " << y << ", " << z << " r: " << sqrt(r2));
                 for(uint32_t j = i; j < i+data->point_step; j++)
                     out.data.push_back(data->data[j]);
                 out.row_step += data->point_step;
